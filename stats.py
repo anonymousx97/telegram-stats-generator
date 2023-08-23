@@ -45,7 +45,7 @@ async def gs():
                     checks_ = (
                         await app.get_chat_member(dialog.chat.id, owner.id)
                     ).status
-                except UserNotParticipant:
+                except:
                     pass
                 if chat_type in [ChatType.GROUP, ChatType.SUPERGROUP]:
                     groups += 1
