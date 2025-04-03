@@ -7,16 +7,85 @@ import sys
 
 if __name__ != "__main__":
     sys.exit()
+
 print("Starting Stats Genrator.\n")
 
+
+import pyrogram
 from dotenv import load_dotenv
-from pyrogram import Client
+from pyrogram import Client, raw, types, utils
 from pyrogram.enums import ChatMemberStatus, ChatType
 from pyrogram.errors import FloodWait, UserNotParticipant
 
 
+async def get_dialogs():
+
+    current = 0
+    total = (1 << 31) - 1
+    limit = min(100, total)
+
+    offset_date = 0
+    offset_id = 0
+    offset_peer = raw.types.InputPeerEmpty()
+
+    while True:
+        r = await app.invoke(
+            raw.functions.messages.GetDialogs(
+                offset_date=offset_date,
+                offset_id=offset_id,
+                offset_peer=offset_peer,
+                limit=limit,
+                hash=0,
+                exclude_pinned=False,
+                folder_id=0,
+            ),
+            sleep_threshold=60,
+        )
+
+        users = {i.id: i for i in r.users}
+        chats = {i.id: i for i in r.chats}
+
+        messages = {}
+
+        dialogs = []
+
+        for message in r.messages:
+            if isinstance(message, raw.types.MessageEmpty):
+                continue
+
+            chat_id = utils.get_peer_id(message.peer_id)
+
+            messages[chat_id] = message
+
+        for dialog in r.dialogs:
+            if not isinstance(dialog, raw.types.Dialog):
+                continue
+
+            dialogs.append(types.Dialog._parse(app, dialog, messages, users, chats))
+
+        if not dialogs:
+            return
+
+        last = dialogs[-1]
+
+        offset_id = last.top_message.id
+        offset_date = last.top_message.date
+        offset_peer = last._raw.peer
+
+        for dialog in dialogs:
+            await asyncio.sleep(0)
+            yield dialog
+
+            current += 1
+
+            if current >= total:
+                return
+
+        await asyncio.sleep(5)
+
+
 async def gs():
-    owner = await app.get_me()
+    owner = app.me
     u_mention = owner.first_name
     unread_mentions = 0
     unread_msg = 0
@@ -29,42 +98,54 @@ async def gs():
     channels = 0
     channels_admin = 0
     channels_creator = 0
-    async for dialog in app.get_dialogs():
+    total = 0
+    async for dialog in get_dialogs():
+        total += 1
+
+        print(dialog.chat.id, dialog.chat.title or dialog.chat.first_name)
+
+        unread_mentions += dialog.unread_mentions_count
+        unread_msg += dialog.unread_messages_count
+
         try:
-            unread_mentions += dialog.unread_mentions_count
-            unread_msg += dialog.unread_messages_count
             chat_type = dialog.chat.type
-            if chat_type in [ChatType.BOT, ChatType.PRIVATE]:
-                private_chats += 1
-                if chat_type == ChatType.BOT:
-                    bots += 1
-                else:
-                    users_ += 1
+        except:
+            print(dialog, dialog.chat)
+            continue
+
+        if chat_type in [ChatType.BOT, ChatType.PRIVATE]:
+            private_chats += 1
+            if chat_type == ChatType.BOT:
+                bots += 1
             else:
-                try:
-                    checks_ = (
-                        await app.get_chat_member(dialog.chat.id, owner.id)
-                    ).status
-                except:
-                    pass
-                if chat_type in [ChatType.GROUP, ChatType.SUPERGROUP]:
-                    groups += 1
-                    if checks_ == ChatMemberStatus.OWNER:
-                        groups_creator += 1
-                    if checks_ == ChatMemberStatus.ADMINISTRATOR:
-                        groups_admin += 1
-                else:  # Channel
-                    channels += 1
-                    if checks_ == ChatMemberStatus.OWNER:
-                        channels_creator += 1
-                    if checks_ == ChatMemberStatus.ADMINISTRATOR:
-                        channels_admin += 1
-        except FloodWait as e:
-            await asyncio.sleep(e.value + 5)
+                users_ += 1
+            continue
+
+        try:
+            rdc = dialog.chat._raw
+            creator = rdc.creator
+            admin = rdc.admin_rights
+        except:
+            print(dialog, dialog.chat)
+            continue
+
+        if chat_type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+            groups += 1
+            if creator:
+                groups_creator += 1
+            elif admin:
+                groups_admin += 1
+        else:  # Channel
+            channels += 1
+            if creator:
+                channels_creator += 1
+            elif admin:
+                channels_admin += 1
 
     results = f"""
 <b><u>Telegram Stats</u></b>
 User:  <b>{u_mention}</b>
+Total: <b>{total}</b>
 
 <b>Private Chats:</b> <code>{private_chats}</code><code>
     • Users: {users_}
@@ -100,14 +181,15 @@ try:
 
     API_ID = int(os.environ.get("API_ID", 0)) or int(input("Your API ID: "))
     API_HASH = os.environ.get("API_HASH") or input("Your API HASH: ")
-    STRING = os.environ.get("STRING_SESSION")
+    STRING = os.environ.get("SESSION_STRING")
 
     app = Client(
         name="bot",
         session_string=STRING,
         api_id=API_ID,
         api_hash=API_HASH,
-        in_memory=True,
+        no_updates=True,
+        takeout=True,
     )
 
     app.start()
